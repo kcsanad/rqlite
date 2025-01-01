@@ -30,6 +30,8 @@ import (
 	"github.com/rqlite/rqlite/v8/queue"
 	"github.com/rqlite/rqlite/v8/rtls"
 	"github.com/rqlite/rqlite/v8/store"
+
+	custom_tls "github.com/rqlite/rqlite/v8/custom/tls"
 )
 
 var (
@@ -331,11 +333,12 @@ type Service struct {
 	statusMu sync.RWMutex
 	statuses map[string]StatusReporter
 
-	CACertFile   string // Path to x509 CA certificate used to verify certificates.
-	CertFile     string // Path to server's own x509 certificate.
-	KeyFile      string // Path to server's own x509 private key.
-	ClientVerify bool   // Whether client certificates should verified.
-	tlsConfig    *tls.Config
+	CACertFile    string // Path to x509 CA certificate used to verify certificates.
+	CertFile      string // Path to server's own x509 certificate.
+	KeyFile       string // Path to server's own x509 private key.
+	ClientVerify  bool   // Whether client certificates should verified.
+	tlsConfig     *tls.Config
+	tlsServerConf *custom_tls.TlServerConf // By KCs
 
 	aoMu        sync.RWMutex
 	allowOrigin string // Value to set for Access-Control-Allow-Origin
@@ -371,6 +374,24 @@ func New(addr string, store Store, cluster Cluster, credentials CredentialStore)
 	}
 }
 
+// By KCs: New returns an uninitialized HTTP service. If credentials is nil, then
+// the service performs no authentication and authorization checks.
+func NewBySpire(addr string, store Store, cluster Cluster, credentials CredentialStore, tlsServerConf *custom_tls.TlServerConf) *Service {
+	return &Service{
+		addr:                addr,
+		store:               store,
+		DefaultQueueCap:     1024,
+		DefaultQueueBatchSz: 128,
+		DefaultQueueTimeout: 100 * time.Millisecond,
+		cluster:             cluster,
+		start:               time.Now(),
+		statuses:            make(map[string]StatusReporter),
+		credentialStore:     credentials,
+		logger:              log.New(os.Stderr, "[http] ", log.LstdFlags),
+		tlsServerConf:       tlsServerConf,
+	}
+}
+
 // Start starts the service.
 func (s *Service) Start() error {
 	s.httpServer = http.Server{
@@ -379,12 +400,13 @@ func (s *Service) Start() error {
 
 	var ln net.Listener
 	var err error
-	if s.CertFile == "" || s.KeyFile == "" {
+	// By KCs
+	if (s.CertFile == "" || s.KeyFile == "") && s.tlsServerConf == nil {
 		ln, err = net.Listen("tcp", s.addr)
 		if err != nil {
 			return err
 		}
-	} else {
+	} else if s.CertFile != "" && s.KeyFile != "" {
 		mTLSState := rtls.MTLSStateDisabled
 		if s.ClientVerify {
 			mTLSState = rtls.MTLSStateEnabled
@@ -407,6 +429,16 @@ func (s *Service) Start() error {
 		} else {
 			b.WriteString(", mutual TLS disabled")
 		}
+		// print the message
+		s.logger.Println(b.String())
+	} else {
+		s.tlsConfig = s.tlsServerConf.MTlsConfigServer
+		ln, err = tls.Listen("tcp", s.addr, s.tlsConfig)
+		if err != nil {
+			return err
+		}
+		var b strings.Builder
+		b.WriteString("secure HTTPS server enabled by Spire, mutual TLS enabled")
 		// print the message
 		s.logger.Println(b.String())
 	}

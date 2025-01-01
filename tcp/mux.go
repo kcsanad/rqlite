@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/rqlite/rqlite/v8/rtls"
+
+	custom_tls "github.com/rqlite/rqlite/v8/custom/tls"
 )
 
 const (
@@ -116,6 +118,12 @@ func NewMutualTLSMux(ln net.Listener, adv net.Addr, cert, key, caCert string) (*
 	return newTLSMux(ln, adv, cert, key, caCert, true)
 }
 
+// By KCs: NewMutualTLSMux returns a new instance of Mux for ln, and encrypts all traffic
+// using TLS. The server will also verify the client's certificate.
+func NewMutualTLSMuxBySpire(ln net.Listener, adv net.Addr, tlsServerConf *custom_tls.TlServerConf) (*Mux, error) {
+	return newTLSMuxBySpire(ln, adv, tlsServerConf)
+}
+
 func newTLSMux(ln net.Listener, adv net.Addr, cert, key, caCert string, mutual bool) (*Mux, error) {
 	mux, err := NewMux(ln, adv)
 	if err != nil {
@@ -130,6 +138,19 @@ func newTLSMux(ln net.Listener, adv net.Addr, cert, key, caCert string, mutual b
 	if err != nil {
 		return nil, fmt.Errorf("cannot create TLS config: %s", err)
 	}
+
+	mux.ln = tls.NewListener(ln, mux.tlsConfig)
+	return mux, nil
+}
+
+// By KCs
+func newTLSMuxBySpire(ln net.Listener, adv net.Addr, tlsServerConf *custom_tls.TlServerConf) (*Mux, error) {
+	mux, err := NewMux(ln, adv)
+	if err != nil {
+		return nil, err
+	}
+
+	mux.tlsConfig = tlsServerConf.MTlsConfigServer
 
 	mux.ln = tls.NewListener(ln, mux.tlsConfig)
 	return mux, nil

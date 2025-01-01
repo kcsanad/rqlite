@@ -32,6 +32,10 @@ import (
 	"github.com/rqlite/rqlite/v8/rtls"
 	"github.com/rqlite/rqlite/v8/store"
 	"github.com/rqlite/rqlite/v8/tcp"
+
+	custom_tls "github.com/rqlite/rqlite/v8/custom/tls"
+
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 const logo = `
@@ -84,20 +88,33 @@ func main() {
 	// Start requested profiling.
 	startProfile(cfg.CPUProfile, cfg.MemProfile, cfg.TraceProfile)
 
+	// By KCs: TLSServerConf initialization - X509Soure & JWTSource by Spire for SERVER
+	tlsServerConf, err := prepareTlsServerConf(cfg)
+	if err != nil {
+		log.Fatalf("unable to set TLSServerConf, error: %v", err)
+	}
+
+	// By KCs: TLSClientConf initialization - X509Soure & JWTSource by Spire for CLIENT
+	tlsClientConf, err := prepareTlsClientConf(cfg)
+	if err != nil {
+		log.Fatalf("unable to set TLSClientConf, error: %v", err)
+	}
+
 	// Create internode network mux and configure.
 	muxLn, err := net.Listen("tcp", cfg.RaftAddr)
 	if err != nil {
 		log.Fatalf("failed to listen on %s: %s", cfg.RaftAddr, err.Error())
 	}
-	mux, err := startNodeMux(cfg, muxLn)
+	// By KCs
+	mux, err := startNodeMuxBySpire(cfg, muxLn, tlsServerConf)
 	if err != nil {
 		log.Fatalf("failed to start node mux: %s", err.Error())
 	}
 
 	// Raft internode layer
 	raftLn := mux.Listen(cluster.MuxRaftHeader)
-	raftDialer, err := cluster.CreateRaftDialer(cfg.NodeX509Cert, cfg.NodeX509Key, cfg.NodeX509CACert,
-		cfg.NodeVerifyServerName, cfg.NoNodeVerify)
+	// By KCs
+	raftDialer, err := cluster.CreateRaftDialerBySpire(tlsClientConf)
 	if err != nil {
 		log.Fatalf("failed to create Raft dialer: %s", err.Error())
 	}
@@ -155,22 +172,22 @@ func main() {
 		log.Fatalf("failed to get credential store: %s", err.Error())
 	}
 
-	// Create cluster service now, so nodes will be able to learn information about each other.
-	clstrServ, err := clusterService(cfg, mux.Listen(cluster.MuxClusterHeader), str, str, credStr)
+	// By KCs: Create cluster service now, so nodes will be able to learn information about each other.
+	clstrServ, err := clusterServiceBySpire(cfg, mux.Listen(cluster.MuxClusterHeader), str, str, credStr, tlsServerConf)
 	if err != nil {
 		log.Fatalf("failed to create cluster service: %s", err.Error())
 	}
 
-	// Create the HTTP service.
+	// By KCs: Create the HTTP service.
 	//
 	// We want to start the HTTP server as soon as possible, so the node is responsive and external
 	// systems can see that it's running. We still have to open the Store though, so the node won't
 	// be able to do much until that happens however.
-	clstrClient, err := createClusterClient(cfg, clstrServ)
+	clstrClient, err := createClusterClientBySpire(cfg, clstrServ, tlsClientConf)
 	if err != nil {
 		log.Fatalf("failed to create cluster client: %s", err.Error())
 	}
-	httpServ, err := startHTTPService(cfg, str, clstrClient, credStr)
+	httpServ, err := startHTTPServiceBySpire(cfg, str, clstrClient, credStr, tlsServerConf)
 	if err != nil {
 		log.Fatalf("failed to start HTTP server: %s", err.Error())
 	}
@@ -411,6 +428,27 @@ func startHTTPService(cfg *Config, str *store.Store, cltr *cluster.Client, credS
 	return s, s.Start()
 }
 
+// By KCs
+func startHTTPServiceBySpire(cfg *Config, str *store.Store, cltr *cluster.Client, credStr *auth.CredentialsStore, tlsServerConf *custom_tls.TlServerConf) (*httpd.Service, error) {
+	// Create HTTP server and load authentication information.
+	s := httpd.NewBySpire(cfg.HTTPAddr, str, cltr, credStr, tlsServerConf)
+
+	s.DefaultQueueCap = cfg.WriteQueueCap
+	s.DefaultQueueBatchSz = cfg.WriteQueueBatchSz
+	s.DefaultQueueTimeout = cfg.WriteQueueTimeout
+	s.DefaultQueueTx = cfg.WriteQueueTx
+	s.BuildInfo = map[string]interface{}{
+		"commit":             cmd.Commit,
+		"branch":             cmd.Branch,
+		"version":            cmd.Version,
+		"compiler_toolchain": runtime.Compiler,
+		"compiler_command":   cmd.CompilerCommand,
+		"build_time":         cmd.Buildtime,
+	}
+	s.SetAllowOrigin(cfg.HTTPAllowOrigin)
+	return s, s.Start()
+}
+
 // startNodeMux starts the TCP mux on the given listener, which should be already
 // bound to the relevant interface.
 func startNodeMux(cfg *Config, ln net.Listener) (*tcp.Mux, error) {
@@ -445,6 +483,23 @@ func startNodeMux(cfg *Config, ln net.Listener) (*tcp.Mux, error) {
 	return mux, nil
 }
 
+// By KCs: startNodeMux starts the TCP mux on the given listener, which should be already
+// bound to the relevant interface.
+func startNodeMuxBySpire(cfg *Config, ln net.Listener, tlsServerConf *custom_tls.TlServerConf) (*tcp.Mux, error) {
+	var err error
+	adv := tcp.NameAddress{
+		Address: cfg.RaftAdv,
+	}
+
+	var mux *tcp.Mux
+	mux, err = tcp.NewMutualTLSMuxBySpire(ln, adv, tlsServerConf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create node-to-node mux: %s", err.Error())
+	}
+	go mux.Serve()
+	return mux, nil
+}
+
 func credentialStore(cfg *Config) (*auth.CredentialsStore, error) {
 	if cfg.AuthFile == "" {
 		return nil, nil
@@ -452,11 +507,23 @@ func credentialStore(cfg *Config) (*auth.CredentialsStore, error) {
 	return auth.NewCredentialsStoreFromFile(cfg.AuthFile)
 }
 
-func clusterService(cfg *Config, ln net.Listener, db cluster.Database, mgr cluster.Manager, credStr *auth.CredentialsStore) (*cluster.Service, error) {
+func clusterService(cfg *Config, ln net.Listener, db cluster.Database, mgr cluster.Manager, credStr *auth.CredentialsStore, tlsServerConf *custom_tls.TlServerConf) (*cluster.Service, error) {
 	c := cluster.New(ln, db, mgr, credStr)
 	c.SetAPIAddr(cfg.HTTPAdv)
 	c.SetVersion(cmd.Version)
-	c.EnableHTTPS(cfg.HTTPx509Cert != "" && cfg.HTTPx509Key != "") // Conditions met for an HTTPS API
+	c.EnableHTTPS((cfg.HTTPx509Cert != "" && cfg.HTTPx509Key != "") || tlsServerConf != nil) // By KCs: Conditions met for an HTTPS API
+	if err := c.Open(); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+// By KCs
+func clusterServiceBySpire(cfg *Config, ln net.Listener, db cluster.Database, mgr cluster.Manager, credStr *auth.CredentialsStore, tlsServerConf *custom_tls.TlServerConf) (*cluster.Service, error) {
+	c := cluster.New(ln, db, mgr, credStr)
+	c.SetAPIAddr(cfg.HTTPAdv)
+	c.SetVersion(cmd.Version)
+	c.EnableHTTPS(true)
 	if err := c.Open(); err != nil {
 		return nil, err
 	}
@@ -474,6 +541,19 @@ func createClusterClient(cfg *Config, clstr *cluster.Service) (*cluster.Client, 
 		}
 	}
 	clstrDialer := tcp.NewDialer(cluster.MuxClusterHeader, dialerTLSConfig)
+	clstrClient := cluster.NewClient(clstrDialer, cfg.ClusterConnectTimeout)
+	if err := clstrClient.SetLocal(cfg.RaftAdv, clstr); err != nil {
+		return nil, fmt.Errorf("failed to set cluster client local parameters: %s", err.Error())
+	}
+	if err := clstrClient.SetLocalVersion(cmd.Version); err != nil {
+		return nil, fmt.Errorf("failed to set cluster client local version: %s", err.Error())
+	}
+	return clstrClient, nil
+}
+
+// By KCs
+func createClusterClientBySpire(cfg *Config, clstr *cluster.Service, tlsClientConf *custom_tls.TlsClientConf) (*cluster.Client, error) {
+	clstrDialer := tcp.NewDialer(cluster.MuxClusterHeader, tlsClientConf.MTlsConfigClient)
 	clstrClient := cluster.NewClient(clstrDialer, cfg.ClusterConnectTimeout)
 	if err := clstrClient.SetLocal(cfg.RaftAdv, clstr); err != nil {
 		return nil, fmt.Errorf("failed to set cluster client local parameters: %s", err.Error())
@@ -630,4 +710,66 @@ func networkCheckJoinAddrs(joinAddrs []string) error {
 		}
 	}
 	return nil
+}
+
+func prepareTlsServerConf(cfg *Config) (*custom_tls.TlServerConf, error) {
+	tlsServerConf := &custom_tls.TlServerConf{
+		AgentSocketPath: cfg.AgentSocketPath,
+		ServerName:      cfg.ServerName,
+		Insecure:        cfg.Insecure,
+		CAFile:          cfg.CA,
+		Logger:          log.New(os.Stderr, "[TlsServerConf] ", log.LstdFlags),
+	}
+
+	tlsServerConf.ClientSpiffeIDs = make([]spiffeid.ID, 0)
+	for _, id := range strings.Split(cfg.ClientSpiffeIDs, ",") {
+		if spID, err := spiffeid.FromString(strings.TrimSpace(id)); err != nil {
+			log.Printf("got wrong client SpiffeID, skip", "SpiffeID", id)
+		} else {
+			tlsServerConf.ClientSpiffeIDs = append(tlsServerConf.ClientSpiffeIDs, spID)
+		}
+	}
+
+	if err := tlsServerConf.InitTlServerConf(); err != nil {
+		if tlsServerConf.X509Source != nil {
+			tlsServerConf.X509Source.Close()
+		}
+		if tlsServerConf.JWTSource != nil {
+			tlsServerConf.JWTSource.Close()
+		}
+		return nil, err
+	}
+
+	return tlsServerConf, nil
+}
+
+func prepareTlsClientConf(cfg *Config) (*custom_tls.TlsClientConf, error) {
+	tlsClientConf := &custom_tls.TlsClientConf{
+		AgentSocketPath: cfg.AgentSocketPath,
+		ServerName:      cfg.ServerName,
+		Insecure:        cfg.Insecure,
+		CAFile:          cfg.CA,
+		Logger:          log.New(os.Stderr, "[TlsClientConf] ", log.LstdFlags),
+	}
+
+	tlsClientConf.ServerSpiffeIDs = make([]spiffeid.ID, 0)
+	for _, id := range strings.Split(cfg.ServerSpiffeIDs, ",") {
+		if spID, err := spiffeid.FromString(strings.TrimSpace(id)); err != nil {
+			log.Printf("Got wrong server SpiffeID, skip", "SpiffeID", id)
+		} else {
+			tlsClientConf.ServerSpiffeIDs = append(tlsClientConf.ServerSpiffeIDs, spID)
+		}
+	}
+
+	if err := tlsClientConf.InitTlsClientConf(); err != nil {
+		if tlsClientConf.X509Source != nil {
+			tlsClientConf.X509Source.Close()
+		}
+		if tlsClientConf.JWTSource != nil {
+			tlsClientConf.JWTSource.Close()
+		}
+		return nil, err
+	}
+
+	return tlsClientConf, nil
 }

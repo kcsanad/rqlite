@@ -184,11 +184,11 @@ func (c *Config) JoinAddresses() []string {
 	return strings.Split(c.JoinAddrs, ",")
 }
 
-// HTTPURL returns the fully-formed, advertised HTTP API address for this config, including
+// By KCs: HTTPURL returns the fully-formed, advertised HTTP API address for this config, including
 // protocol, host and port.
 func (c *Config) HTTPURL() string {
 	apiProto := "http"
-	if c.HTTPx509Cert != "" {
+	if c.HTTPx509Cert != "" || c.ClientSpiffeIDs != "" {
 		apiProto = "https"
 	}
 	return fmt.Sprintf("%s://%s", apiProto, c.HTTPAdv)

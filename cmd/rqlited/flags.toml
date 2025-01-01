@@ -552,3 +552,57 @@ short_help = "Path to file for trace profiling information"
 long_help = """
 """
 default = ""
+
+[[flags]]
+name = "AgentSocketPath"
+cli = "agent-socket-path"
+type = "string"
+short_help = "Path to the SPIRE Server API socket"
+long_help = """
+"""
+default = "unix:///tmp/spire-agent/public/api.sock"
+
+[[flags]]
+name = "ClientSpiffeIDs"
+cli = "client-spiffe-ids"
+type = "string"
+short_help = "SpiffeID of client(s) this server can accept mTLS from. It is a comma ',' separated list"
+long_help = """
+"""
+default = ""
+
+[[flags]]
+name = "ServerSpiffeIDs"
+cli = "server-spiffe-ids"
+type = "string"
+short_help = "SpiffeID of server(s) this client can establish mTLS with. It is a comma ',' separated list"
+long_help = """
+"""
+default = ""
+
+[[flags]]
+name = "CA"
+cli = "ca"
+type = "string"
+short_help = "CA chain in PEM encoded file for spire"
+long_help = """
+"""
+default = ""
+
+[[flags]]
+name = "ServerName"
+cli = "server-name"
+type = "string"
+short_help = "It is used to verify the hostname on the returned certificate unless insecure is defined"
+long_help = """
+"""
+default = ""
+
+[[flags]]
+name = "Insecure"
+cli = "insecure"
+type = "bool"
+short_help = "It is used to verify the hostname on the returned certificate unless insecure is defined"
+long_help = """
+"""
+default = false

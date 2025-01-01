@@ -19,6 +19,8 @@ import (
 	"github.com/rqlite/rqlite/v8/tcp"
 	"github.com/rqlite/rqlite/v8/tcp/pool"
 	pb "google.golang.org/protobuf/proto"
+
+	custom_tls "github.com/rqlite/rqlite/v8/custom/tls"
 )
 
 const (
@@ -41,6 +43,12 @@ func CreateRaftDialer(cert, key, caCert, serverName string, Insecure bool) (*tcp
 		}
 	}
 	return tcp.NewDialer(MuxRaftHeader, dialerTLSConfig), nil
+}
+
+// By KCs: CreateRaftDialer creates a dialer for connecting to other nodes' Raft service. If the cert and
+// key arguments are not set, then the returned dialer will not use TLS.
+func CreateRaftDialerBySpire(tlsClientConf *custom_tls.TlsClientConf) (*tcp.Dialer, error) {
+	return tcp.NewDialer(MuxRaftHeader, tlsClientConf.MTlsConfigClient), nil
 }
 
 // CredentialsFor returns a Credentials instance for the given username, or nil if

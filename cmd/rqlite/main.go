@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,6 +24,10 @@ import (
 	"github.com/rqlite/rqlite/v8/cmd/rqlite/history"
 	httpcl "github.com/rqlite/rqlite/v8/cmd/rqlite/http"
 	"github.com/rqlite/rqlite/v8/rtls"
+
+	custom_tls "github.com/rqlite/rqlite/v8/custom/tls"
+
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
 )
 
 const maxRedirect = 21
@@ -36,18 +41,21 @@ type Nodes map[string]Node
 
 type argT struct {
 	cli.Helper
-	Alternatives string        `cli:"a,alternatives" usage:"comma separated list of 'host:port' pairs to use as fallback"`
-	Protocol     string        `cli:"s,scheme" usage:"protocol scheme (http or https)" dft:"http"`
-	Host         string        `cli:"H,host" usage:"rqlited host address" dft:"127.0.0.1"`
-	Port         uint16        `cli:"p,port" usage:"rqlited host port" dft:"4001"`
-	Prefix       string        `cli:"P,prefix" usage:"rqlited HTTP URL prefix" dft:"/"`
-	Insecure     bool          `cli:"i,insecure" usage:"do not verify rqlited HTTPS certificate" dft:"false"`
-	CACert       string        `cli:"c,ca-cert" usage:"path to trusted X.509 root CA certificate"`
-	ClientCert   string        `cli:"d,client-cert" usage:"path to client X.509 certificate for mTLS"`
-	ClientKey    string        `cli:"k,client-key" usage:"path to client X.509 key for mTLS"`
-	Credentials  string        `cli:"u,user" usage:"set basic auth credentials in form username:password"`
-	Version      bool          `cli:"v,version" usage:"display CLI version"`
-	HTTPTimeout  clix.Duration `cli:"t,http-timeout" usage:"set timeout on HTTP requests" dft:"30s"`
+	Alternatives    string        `cli:"a,alternatives" usage:"comma separated list of 'host:port' pairs to use as fallback"`
+	Protocol        string        `cli:"s,scheme" usage:"protocol scheme (http or https)" dft:"http"`
+	Host            string        `cli:"H,host" usage:"rqlited host address" dft:"127.0.0.1"`
+	Port            uint16        `cli:"p,port" usage:"rqlited host port" dft:"4001"`
+	Prefix          string        `cli:"P,prefix" usage:"rqlited HTTP URL prefix" dft:"/"`
+	Insecure        bool          `cli:"i,insecure" usage:"do not verify rqlited HTTPS certificate" dft:"false"`
+	CACert          string        `cli:"c,ca-cert" usage:"path to trusted X.509 root CA certificate"`
+	ClientCert      string        `cli:"d,client-cert" usage:"path to client X.509 certificate for mTLS"`
+	ClientKey       string        `cli:"k,client-key" usage:"path to client X.509 key for mTLS"`
+	Credentials     string        `cli:"u,user" usage:"set basic auth credentials in form username:password"`
+	Version         bool          `cli:"v,version" usage:"display CLI version"`
+	HTTPTimeout     clix.Duration `cli:"t,http-timeout" usage:"set timeout on HTTP requests" dft:"30s"`
+	AgentSocketPath string        `cli:"A,agent-socket-path" usage:"Path to the SPIRE Server API socket" dft:"unix:///tmp/spire-agent/public/api.sock"`
+	ServerSpiffeIDs string        `cli:"I,server-spiffe-ids" usage:"SpiffeID of server(s) this client can establish mTLS with. It is a comma ',' separated list" dft:""`
+	ServerName      string        `cli:"N,server-name" usage:"It is used to verify the hostname on the returned certificate unless insecure is defined" dft:""`
 }
 
 var cliHelp []string
@@ -94,7 +102,14 @@ func main() {
 			return nil
 		}
 
-		httpClient, err := getHTTPClient(argv)
+		// By KCs: TLSClientConf initialization - X509Soure & JWTSource by Spire for CLIENT
+		tlsClientConf, err := prepareTlsClientConf(argv)
+		if err != nil {
+			log.Fatalf("unable to set TLSClientConf, error: %v", err)
+		}
+
+		// By KCs
+		httpClient, err := getHTTPClientBySpire(argv, tlsClientConf)
 		if err != nil {
 			ctx.String("%s %v\n", ctx.Color().Red("ERR!"), err)
 			return nil
@@ -465,6 +480,28 @@ func getHTTPClient(argv *argT) (*http.Client, error) {
 	return &client, nil
 }
 
+// By KCs
+func getHTTPClientBySpire(argv *argT, tlsClientConf *custom_tls.TlsClientConf) (*http.Client, error) {
+	tlsConfig := tlsClientConf.MTlsConfigClient
+
+	tlsConfig.NextProtos = nil // CLI refuses to connect otherwise.
+
+	client := http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: tlsConfig,
+			Proxy:           http.ProxyFromEnvironment,
+		},
+		Timeout: argv.HTTPTimeout.Duration,
+	}
+
+	// Explicitly handle redirects.
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+
+	return &client, nil
+}
+
 func getVersionWithClient(client *http.Client, argv *argT) (string, error) {
 	u := url.URL{
 		Scheme: argv.Protocol,
@@ -772,4 +809,35 @@ func createHostList(argv *argT) []string {
 // which is compatible with IPv6 addresses.
 func address6(argv *argT) string {
 	return net.JoinHostPort(argv.Host, fmt.Sprintf("%d", argv.Port))
+}
+
+func prepareTlsClientConf(argv *argT) (*custom_tls.TlsClientConf, error) {
+	tlsClientConf := &custom_tls.TlsClientConf{
+		AgentSocketPath: argv.AgentSocketPath,
+		ServerName:      argv.ServerName,
+		Insecure:        argv.Insecure,
+		CAFile:          argv.CACert,
+		Logger:          log.New(os.Stderr, "[TlsClientConf] ", log.LstdFlags),
+	}
+
+	tlsClientConf.ServerSpiffeIDs = make([]spiffeid.ID, 0)
+	for _, id := range strings.Split(argv.ServerSpiffeIDs, ",") {
+		if spID, err := spiffeid.FromString(strings.TrimSpace(id)); err != nil {
+			log.Printf("Got wrong server SpiffeID, skip", "SpiffeID", id)
+		} else {
+			tlsClientConf.ServerSpiffeIDs = append(tlsClientConf.ServerSpiffeIDs, spID)
+		}
+	}
+
+	if err := tlsClientConf.InitTlsClientConf(); err != nil {
+		if tlsClientConf.X509Source != nil {
+			tlsClientConf.X509Source.Close()
+		}
+		if tlsClientConf.JWTSource != nil {
+			tlsClientConf.JWTSource.Close()
+		}
+		return nil, err
+	}
+
+	return tlsClientConf, nil
 }

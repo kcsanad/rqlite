@@ -19,12 +19,14 @@ require (
 	github.com/rqlite/raft-boltdb/v2 v2.0.0-20230523104317-c08e70f4de48
 	github.com/rqlite/rqlite-disco-clients v0.0.0-20231230135307-118e35426347
 	github.com/rqlite/sql v0.0.0-20241111133259-a4122fabb196
+	github.com/spiffe/go-spiffe/v2 v2.4.0
 	go.etcd.io/bbolt v1.3.11
 	golang.org/x/net v0.33.0
 	google.golang.org/protobuf v1.36.1
 )
 
 require (
+	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/armon/go-metrics v0.5.3 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.6.7 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.16.22 // indirect
@@ -43,6 +45,7 @@ require (
 	github.com/coreos/go-semver v0.3.1 // indirect
 	github.com/coreos/go-systemd/v22 v22.5.0 // indirect
 	github.com/fatih/color v1.18.0 // indirect
+	github.com/go-jose/go-jose/v4 v4.0.4 // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/hashicorp/consul/api v1.31.0 // indirect
@@ -61,6 +64,7 @@ require (
 	github.com/mitchellh/go-homedir v1.1.0 // indirect
 	github.com/mitchellh/mapstructure v1.5.0 // indirect
 	github.com/mkideal/expr v0.1.0 // indirect
+	github.com/zeebo/errs v1.3.0 // indirect
 	go.etcd.io/etcd/api/v3 v3.5.17 // indirect
 	go.etcd.io/etcd/client/pkg/v3 v3.5.17 // indirect
 	go.etcd.io/etcd/client/v3 v3.5.17 // indirect

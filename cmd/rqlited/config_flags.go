@@ -125,6 +125,18 @@ type Config struct {
 	MemProfile string
 	// Path to file for trace profiling information
 	TraceProfile string
+	// Path to the SPIRE Server API socket
+	AgentSocketPath string
+	// SpiffeID of client(s) this server can accept mTLS from. It is a comma ',' separated list
+	ClientSpiffeIDs string
+	// SpiffeID of server(s) this client can establish mTLS with. It is a comma ',' separated list
+	ServerSpiffeIDs string
+	// CA chain in PEM encoded file for spire
+	CA string
+	// It is used to verify the hostname on the returned certificate unless insecure is defined
+	ServerName string
+	// It is used to verify the hostname on the returned certificate unless insecure is defined
+	Insecure bool
 }
 
 // Forge sets up and parses command-line flags.
@@ -191,6 +203,12 @@ func Forge(arguments []string) (*flag.FlagSet, *Config, error) {
 	fs.StringVar(&config.CPUProfile, "cpu-profile", "", "Path to file for CPU profiling information")
 	fs.StringVar(&config.MemProfile, "mem-profile", "", "Path to file for memory profiling information")
 	fs.StringVar(&config.TraceProfile, "trace-profile", "", "Path to file for trace profiling information")
+	fs.StringVar(&config.AgentSocketPath, "agent-socket-path", "unix:///tmp/spire-agent/public/api.sock", "Path to the SPIRE Server API socket")
+	fs.StringVar(&config.ClientSpiffeIDs, "client-spiffe-ids", "", "SpiffeID of client(s) this server can accept mTLS from. It is a comma ',' separated list")
+	fs.StringVar(&config.ServerSpiffeIDs, "server-spiffe-ids", "", "SpiffeID of server(s) this client can establish mTLS with. It is a comma ',' separated list")
+	fs.StringVar(&config.CA, "ca", "", "CA chain in PEM encoded file for spire")
+	fs.StringVar(&config.ServerName, "server-name", "", "It is used to verify the hostname on the returned certificate unless insecure is defined")
+	fs.BoolVar(&config.Insecure, "insecure", false, "It is used to verify the hostname on the returned certificate unless insecure is defined")
 	fs.Usage = func() {
 		usage("\nrqlite is a lightweight, distributed relational database, which uses SQLite as its\nstorage engine. It provides an easy-to-use, fault-tolerant store for relational data.\n\nVisit https://www.rqlite.io to learn more.\n\nUsage: rqlited [flags] <data directory>\n")
 		fs.PrintDefaults()
